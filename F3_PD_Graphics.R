@@ -3,69 +3,94 @@ library(dplyr)
 library(purrr)
 library(tools)
 
-# Folder with PD CSVs
+# Folder with CSV files
 pd_dir <- "outputs/PD"
 
 # All files PD_*.csv
 pd_files <- list.files(pd_dir, pattern = "^PD_.*\\.csv$", full.names = TRUE)
 
-# Table with file info and linetype grouping
-region_info <- data.frame(
-  region     = file_path_sans_ext(basename(pd_files)),
-  file_index = seq_along(pd_files),
-  stringsAsFactors = FALSE
-) %>%
-  mutate(
-    # groups of 4 files: 1–4, 5–8, 9–12, ...
-    block_id = (file_index - 1) %/% 4,
-    # cycle block_id to 1,2,3,1,2,3,... for linetype pattern
-    linetype_group = (block_id %% 3) + 1,
-    linetype_group = factor(linetype_group, levels = 1:3)
-  )
-
-# Read all files and add region/subregion name from filename
+# Read files
 pd_all <- map_dfr(pd_files, function(f) {
   df <- read.csv(f)
-  region_name <- file_path_sans_ext(basename(f))
-  df$region <- region_name
+  df$region <- file_path_sans_ext(basename(f))
   df
 })
 
-# Variable order for facets
+# Order of variables
 var_order <- c(
-  "bio1",
-  "bio2",
-  "bio7",
-  "bio12",
-  "bio14",
+  "bio1", "bio2", "bio7", "bio12", "bio14",
   "anthro_cropland_mosaic",
   "anthro_cropland_strict",
   "anthro_urban"
 )
 
-# Add linetype info and set variable order
-pd_all <- pd_all %>%
-  left_join(region_info, by = "region") %>%
-  mutate(variable = factor(variable, levels = var_order))
+pd_all <- map_dfr(pd_files, function(f) {
+  df <- read.csv(f)
+  df$region <- file_path_sans_ext(basename(f))
+  df$source_file <- basename(f)   # added the source file name
+  df
+})
 
+# --- SET FILE INDEX FOR COLOR ---
+region_info <- data.frame(
+  region     = unique(pd_all$region),
+  file_index = seq_along(unique(pd_all$region)),
+  stringsAsFactors = FALSE
+)
+
+pd_all <- pd_all %>%
+  left_join(region_info, by = "region")
+
+# --- SAVE THE MERGED PD TABLE FOR ALL REGIONS ---
+out_csv <- file.path(pd_dir, "PD_all_regions.csv")
+write.csv(pd_all, out_csv, row.names = FALSE)
+cat("✔ The table with all PD values has been saved to:", out_csv, "\n")
+
+# --- COLORS IN BLOCKS OF 4 FILES ---
+color_scheme <- c("green3", "red3", "blue3", "black")  # cycle of 4 colors
+
+region_colors <- sapply(region_info$file_index, function(i) {
+  block_id <- (i - 1) %/% 4
+  color_scheme[(block_id %% 4) + 1]
+})
+
+names(region_colors) <- region_info$region
+
+# --- KEEP THE LINETYPES UNCHANGED ---
+unique_regions <- region_info$region
+region_linetypes <- rep(c("solid", "dashed", "twodash", "dotted"),
+                        length.out = length(unique_regions))
+names(region_linetypes) <- unique_regions
+
+# --- Output PDF ---
 out_pdf <- file.path(pd_dir, "PD_all_regions_comparison.pdf")
 
-pdf(out_pdf, width = 12, height = 8)
+pdf(out_pdf, width = 46, height = 31)
+
 ggplot(pd_all, aes(x = x_value,
                    y = pred_mean,
                    colour = region,
-                   linetype = linetype_group)) +
-  geom_line() +
+                   linetype = region)) +
+  geom_line(size = 2) +
   facet_wrap(~ variable, scales = "free_x", ncol = 4) +
+  scale_colour_manual(
+    values = region_colors,
+    name   = "Region"
+  ) +
   scale_linetype_manual(
-    values = c("solid", "dashed", "dotdash"),
-    guide = "none"
+    values = region_linetypes,
+    name   = "Region"
   ) +
   theme_bw() +
   theme(
-    legend.position = "bottom",
-    legend.key.width = unit(1.5, "lines")
+    legend.position  = "bottom",
+    legend.key.width = unit(3.5, "lines"),
+    panel.border     = element_rect(colour = "black", fill = NA, size = 1.1),
+    strip.text       = element_text(size = 40),
+    axis.text        = element_text(size = 40),
+    axis.title       = element_text(size = 20)
   )
+
 dev.off()
 
-cat("✔ Plot saved to file:", out_pdf, "\n")
+cat("✔ Plot saved to:", out_pdf, "\n")
